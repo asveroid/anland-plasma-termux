@@ -42,7 +42,7 @@ echo "=================================================="
 pkg update -y
 pkg upgrade -y
 pkg install x11-repo -y
-pkg install curl wget -y
+pkg install curl wget procps -y
 
 echo "=================================================="
 echo " Step 1: Storage access & battery optimization"
@@ -67,7 +67,7 @@ echo "=================================================="
 echo " Step 3: Android APKs"
 echo "=================================================="
 echo "-> SKIPPED in this script (must be done manually):"
-echo "   1. Install AnlandTermux-${ANLAND_VER}.apk (or -compatible if Termux is from F-Droid)"
+echo "   1. Install AnlandTermux-${ANLAND_VER}.apk"
 echo "      from: https://github.com/lfdevs/anland-termux/releases/latest"
 echo "      After installing, LONG-PRESS the app icon to open its settings."
 echo "   2. Install Termux:API.apk from F-Droid or:"
@@ -143,37 +143,6 @@ echo "=================================================="
 cd "$HOME"
 curl -LO https://github.com/lfdevs/anland-termux/raw/refs/heads/main/scripts/startplasma-anland.sh
 chmod +x ./startplasma-anland.sh
-
-echo "=================================================="
-echo " Step 12: Desktop shutdown launcher"
-echo "=================================================="
-cat > "$HOME/stop-plasma.sh" <<'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-#
-# stop-plasma.sh
-# Stops the Anland Plasma desktop session (KWin, XWayland, Anland daemon).
-
-pkill -TERM -f kwin_wayland 2>/dev/null
-pkill -TERM -f startplasma 2>/dev/null
-pkill -TERM -f xwayland 2>/dev/null
-pkill -TERM -x anland 2>/dev/null
-pkill -TERM -x anland-compatible 2>/dev/null
-EOF
-chmod +x "$HOME/stop-plasma.sh"
-
-mkdir -p "$HOME/Desktop"
-cat > "$HOME/Desktop/StopPlasma.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Stop Plasma Desktop
-Comment=Stop the Anland Plasma session
-Exec=$HOME/stop-plasma.sh
-Icon=system-shutdown
-Terminal=false
-EOF
-chmod +x "$HOME/Desktop/StopPlasma.desktop"
-echo "Shutdown launcher created at: $HOME/Desktop/StopPlasma.desktop"
-echo "(First launch inside Plasma may ask to 'Trust & Launch' the executable.)"
 
 echo "=================================================="
 echo " DONE"
