@@ -6,7 +6,6 @@ This script automates most of the steps from the [official Anland: Termux user g
 
 ## What gets installed
 
-- `curl`, `wget`
 - KDE Plasma (`plasma`, `dolphin`, `konsole`)
 - XWayland + KWin (Anland variant)
 - Anland daemon
@@ -15,7 +14,6 @@ This script automates most of the steps from the [official Anland: Termux user g
 - PipeWire (audio)
 - Chromium
 - Extra apps: VLC, MPV, Xarchiver, File Roller, Fastfetch, Htop, LibreOffice
-- A "Stop Plasma Desktop" icon on the Plasma desktop to shut down the session
 
 ## Requirements
 
@@ -51,10 +49,6 @@ This script automates most of the steps from the [official Anland: Termux user g
    ```
 
 5. The KDE Plasma desktop will appear inside the Anland Termux app.
-
-## Shutting down the desktop
-
-Inside the Plasma desktop, double-click the **"Stop Plasma Desktop"** icon that's automatically placed on the Desktop. The first time you launch it, KDE will show a "Trust this executable?" dialog — click "Trust & Launch" (only needed once).
 
 ## Notes
 
