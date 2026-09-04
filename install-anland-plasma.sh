@@ -145,6 +145,287 @@ curl -LO https://github.com/lfdevs/anland-termux/raw/refs/heads/main/scripts/sta
 chmod +x ./startplasma-anland.sh
 
 echo "=================================================="
+echo " Step 12: Fix xdg-desktop-portal (Chromium file picker)"
+echo "=================================================="
+echo "This patches and rebuilds xdg-desktop-portal so Chromium's"
+echo "file open/save/upload dialogs work on Termux Native."
+echo "This step compiles from source and can take a while."
+cat > "$HOME/fix-xdg-desktop-portal.sh" << 'FIXPORTALEOF'
+#!/data/data/com.termux/files/usr/bin/bash
+#
+# fix-xdg-desktop-portal.sh
+#
+# Patches and rebuilds xdg-desktop-portal on Termux (native, no proot/chroot)
+# so Chromium's file picker (open/save/upload dialogs) works.
+#
+# Background: Chromium's Termux build has no GTK support, so it depends
+# entirely on the xdg-desktop-portal FileChooser D-Bus interface. That
+# daemon fails to register unsandboxed ("host") apps because it tries to
+# open /proc/<pid>/root, which Android's SELinux policy blocks with EACCES
+# even for same-UID processes. The upstream code only expects EACCES to
+# mean "fuse rootfs" and treats anything else as fatal, so app-info
+# detection never falls through to the host-app case.
+#
+# This script:
+#   1. Installs build dependencies
+#   2. Clones the xdg-desktop-portal source matching the installed version
+#   3. Patches the EACCES handling in the flatpak/linyaps app-info probes
+#   4. Patches libglnx for missing strdupa() (Bionic has no GNU strdupa)
+#   5. Disables the document-portal (needs fuse3, unavailable on Termux
+#      and not needed for FileChooser) and test/sandboxed-validation
+#      dependencies (bubblewrap, unavailable on Termux)
+#   6. Compiles targeting Android API 30 (memfd_create/getrandom need
+#      that even though libc.so on a modern device has them)
+#   7. Backs up the original binary and installs the patched one
+#
+# Safe to re-run; it always starts from a clean checkout.
+#
+# Requirements: none beyond a working Termux + x11-repo with `chromium`
+# and `xdg-desktop-portal` / `xdg-desktop-portal-kde` already installed.
+
+set -euo pipefail
+
+PREFIX="/data/data/com.termux/files/usr"
+SRC_DIR="$HOME/xdp-src"
+BACKUP_DIR="$HOME/xdg-desktop-portal-backups"
+PORTAL_BIN="$PREFIX/libexec/xdg-desktop-portal"
+
+log()  { printf '\033[32m[+] %s\033[0m\n' "$1"; }
+warn() { printf '\033[33m[!] %s\033[0m\n' "$1"; }
+die()  { printf '\033[31m[x] %s\033[0m\n' "$1" >&2; exit 1; }
+
+[[ -n "${TERMUX_VERSION:-}" ]] || die "Script ini cuma buat native Termux, bukan proot/chroot."
+
+# ---------------------------------------------------------------------------
+log "Step 1/7: Install dependencies"
+# ---------------------------------------------------------------------------
+DEPS=(git python ninja pkg-config glib dbus json-glib gdk-pixbuf gstreamer geoclue pipewire xdg-desktop-portal xdg-desktop-portal-kde kdialog)
+FAILED_DEPS=()
+
+for dep in "${DEPS[@]}"; do
+    if ! pkg install -y "$dep"; then
+        FAILED_DEPS+=("$dep")
+    fi
+done
+
+if [[ ${#FAILED_DEPS[@]} -gt 0 ]]; then
+    warn "Paket berikut gagal terinstall (nama mungkin beda di device ini): ${FAILED_DEPS[*]}"
+    warn "Cek nama yang benar dengan: pkg search <nama>, lalu install manual sebelum lanjut."
+    read -rp "Lanjut tetap coba build? (y/n) " reply
+    [[ $reply == y || $reply == Y ]] || exit 1
+fi
+
+pip install --quiet meson --break-system-packages
+
+command -v meson  > /dev/null || die "meson gagal terinstall"
+command -v ninja  > /dev/null || die "ninja gagal terinstall"
+
+# ---------------------------------------------------------------------------
+log "Step 2/7: Clone source (versi dicocokkan dengan paket terpasang)"
+# ---------------------------------------------------------------------------
+INSTALLED_VERSION=$(pkg show xdg-desktop-portal 2>/dev/null | awk -F': ' '/^Version/{print $2; exit}') || true
+INSTALLED_VERSION=${INSTALLED_VERSION:-1.22.1}
+log "Versi terpasang terdeteksi: $INSTALLED_VERSION"
+
+rm -rf "$SRC_DIR"
+if ! git clone --branch "$INSTALLED_VERSION" --depth 1 \
+        https://github.com/flatpak/xdg-desktop-portal.git "$SRC_DIR" 2> "$HOME/xdp-clone.log"; then
+    warn "Tag $INSTALLED_VERSION tidak ketemu, fallback ke 1.22.1"
+    rm -rf "$SRC_DIR"
+    git clone --branch 1.22.1 --depth 1 \
+        https://github.com/flatpak/xdg-desktop-portal.git "$SRC_DIR"
+fi
+
+log "Mengunduh subprojects (libglnx, gvdb) -- dibutuhkan sebelum patching"
+cd "$SRC_DIR"
+meson subprojects download
+
+# ---------------------------------------------------------------------------
+log "Step 3/7: Patch EACCES handling (flatpak & linyaps app-info probes)"
+# ---------------------------------------------------------------------------
+python3 - "$SRC_DIR" << 'PYEOF'
+import sys
+
+base = sys.argv[1]
+
+def patch(path, old, new, label):
+    with open(path) as f:
+        content = f.read()
+    if new.strip() in content:
+        print(f"  - sudah dipatch, skip: {label}")
+        return
+    if old not in content:
+        print(f"  ! GAGAL, teks lama tidak ketemu di {label} -- source mungkin berubah, cek manual.")
+        sys.exit(1)
+    content = content.replace(old, new)
+    with open(path, "w") as f:
+        f.write(content)
+    print(f"  - patched: {label}")
+
+patch(
+    f"{base}/src/xdp-app-info-flatpak.c",
+    '''      if (errno == EACCES)
+        {
+          struct statfs buf;
+
+          /* Access to the root dir isn't allowed. This can happen if the root is on a fuse
+           * filesystem, such as in a toolbox container. We will never have a fuse rootfs
+           * in the flatpak case, so in that case its safe to ignore this and
+           * continue to detect other types of apps.
+           */
+          if (statfs (root_path, &buf) == 0 &&
+              buf.f_type == 0x65735546) /* FUSE_SUPER_MAGIC */
+            {
+              g_set_error (error, XDP_APP_INFO_ERROR, XDP_APP_INFO_ERROR_WRONG_APP_KIND,
+                           "Not a flatpak (fuse rootfs)");
+              return -1;
+            }
+        }''',
+    '''      if (errno == EACCES)
+        {
+          /* Access to the root dir isn't allowed. This can happen if the root is on a fuse
+           * filesystem, or due to platform sandboxing (e.g. Android SELinux) that blocks
+           * reading /proc/<pid>/root even for same-uid processes. We will never have a
+           * fuse rootfs in the flatpak case, so it's safe to treat this as "not a flatpak"
+           * and continue detecting other app types (eventually falling back to host app).
+           */
+          g_set_error (error, XDP_APP_INFO_ERROR, XDP_APP_INFO_ERROR_WRONG_APP_KIND,
+                       "Not a flatpak (root dir inaccessible)");
+          return -1;
+        }''',
+    "xdp-app-info-flatpak.c",
+)
+
+patch(
+    f"{base}/src/xdp-app-info-linyaps.c",
+    '''      if (errno == EACCES)
+        {
+          struct statfs buf;
+          if (statfs (root_path, &buf) == 0 &&
+              buf.f_type == 0x65735546) /* FUSE_SUPER_MAGIC */
+          {
+            g_set_error (error, XDP_APP_INFO_ERROR,
+                         XDP_APP_INFO_ERROR_WRONG_APP_KIND,
+                         "Not a linyaps (fuse rootfs)");
+            return -1;
+          }
+        }''',
+    '''      if (errno == EACCES)
+        {
+          g_set_error (error, XDP_APP_INFO_ERROR,
+                       XDP_APP_INFO_ERROR_WRONG_APP_KIND,
+                       "Not a linyaps (root dir inaccessible)");
+          return -1;
+        }''',
+    "xdp-app-info-linyaps.c",
+)
+PYEOF
+
+# ---------------------------------------------------------------------------
+log "Step 4/7: Patch meson.build (skip document-portal/fuse3) & libglnx (strdupa)"
+# ---------------------------------------------------------------------------
+python3 - "$SRC_DIR" << 'PYEOF'
+import sys
+base = sys.argv[1]
+
+# Skip document-portal subdir (needs fuse3, not on Termux, not needed for FileChooser)
+mpath = f"{base}/meson.build"
+with open(mpath) as f:
+    c = f.read()
+c = c.replace(
+    "subdir('document-portal')",
+    "# subdir('document-portal')  # skipped: needs fuse3, unavailable on Termux, not needed for FileChooser",
+)
+c = c.replace(
+    "fuse3_dep = dependency('fuse3', version: '>= 3.10.0')",
+    "fuse3_dep = dependency('fuse3', version: '>= 3.10.0', required: false)",
+)
+with open(mpath, "w") as f:
+    f.write(c)
+print("  - meson.build patched (document-portal skipped, fuse3 optional)")
+
+# strdupa compat shim for Bionic (Android libc), used in libglnx
+compat_macro = '''#include "libglnx-config.h"
+
+/* strdupa is a GNU libc extension not available on Bionic (Android/Termux).
+ * Emulate it with a macro combining alloca + memcpy. */
+#ifndef strdupa
+#include <alloca.h>
+#define strdupa(s) \\
+  (__extension__ ({ \\
+    const char *__old = (s); \\
+    size_t __len = strlen (__old) + 1; \\
+    char *__new = (char *) alloca (__len); \\
+    (char *) memcpy (__new, __old, __len); \\
+  }))
+#endif
+'''
+
+for fname in ("glnx-fdio.c", "glnx-shutil.c"):
+    fpath = f"{base}/subprojects/libglnx/{fname}"
+    with open(fpath) as f:
+        content = f.read()
+    if "strdupa is a GNU libc extension" in content:
+        print(f"  - sudah dipatch, skip: {fname}")
+        continue
+    if '#include "libglnx-config.h"' not in content:
+        print(f"  ! GAGAL, include anchor tidak ketemu di {fname}")
+        sys.exit(1)
+    content = content.replace('#include "libglnx-config.h"', compat_macro, 1)
+    with open(fpath, "w") as f:
+        f.write(content)
+    print(f"  - patched: {fname}")
+PYEOF
+
+# ---------------------------------------------------------------------------
+log "Step 5/7: meson setup"
+# ---------------------------------------------------------------------------
+cd "$SRC_DIR"
+rm -rf builddir
+CFLAGS="-target aarch64-linux-android30" meson setup builddir \
+    -Dtests=disabled \
+    -Dsandboxed-image-validation=disabled \
+    -Dsandboxed-sound-validation=disabled
+
+# ---------------------------------------------------------------------------
+log "Step 6/7: Compile (ninja) -- ini bisa makan waktu, sabar"
+# ---------------------------------------------------------------------------
+cd "$SRC_DIR/builddir"
+ninja
+
+[[ -x src/xdg-desktop-portal ]] || die "Build gagal, binary hasil tidak ditemukan."
+
+# ---------------------------------------------------------------------------
+log "Step 7/7: Backup binary lama, pasang binary hasil patch"
+# ---------------------------------------------------------------------------
+mkdir -p "$BACKUP_DIR"
+pkill -9 -f "$PORTAL_BIN\$" > /dev/null 2>&1 || true
+
+if [[ -f "$PORTAL_BIN" && ! -f "$BACKUP_DIR/xdg-desktop-portal.orig" ]]; then
+    cp "$PORTAL_BIN" "$BACKUP_DIR/xdg-desktop-portal.orig"
+    log "Binary asli di-backup ke: $BACKUP_DIR/xdg-desktop-portal.orig"
+fi
+
+cp "$SRC_DIR/builddir/src/xdg-desktop-portal" "$PORTAL_BIN"
+chmod 755 "$PORTAL_BIN"
+
+log "SELESAI. xdg-desktop-portal sudah dipatch dan terpasang di:"
+echo "    $PORTAL_BIN"
+echo
+echo "Cara pakai:"
+echo "  1. Pastikan xdg-desktop-portal-kde juga jalan (satu D-Bus session yang sama):"
+echo "     $PREFIX/lib/libexec/xdg-desktop-portal-kde &"
+echo "  2. Jalankan daemon yang sudah dipatch:"
+echo "     $PORTAL_BIN &"
+echo "  3. Buka chromium-browser dan coba Ctrl+O / upload file."
+echo
+echo "Untuk rollback ke binary asli:"
+echo "  cp $BACKUP_DIR/xdg-desktop-portal.orig $PORTAL_BIN"
+FIXPORTALEOF
+chmod +x "$HOME/fix-xdg-desktop-portal.sh"
+"$HOME/fix-xdg-desktop-portal.sh" || echo "   [!] xdg-desktop-portal fix failed or was skipped. You can re-run it later with: ~/fix-xdg-desktop-portal.sh"
+
+echo "=================================================="
 echo " DONE"
 echo "=================================================="
 echo "All packages are installed. Next steps (manual):"
