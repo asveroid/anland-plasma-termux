@@ -6,6 +6,7 @@ This script automates most of the steps from the [official Anland: Termux user g
 
 ## What gets installed
 
+- `curl`, `wget`, `procps` (needed for a working `pkill`, since Termux's default `pkill` can throw "Bad system call" on some Android devices)
 - KDE Plasma (`plasma`, `dolphin`, `konsole`)
 - XWayland + KWin (Anland variant)
 - Anland daemon
@@ -14,6 +15,7 @@ This script automates most of the steps from the [official Anland: Termux user g
 - PipeWire (audio)
 - Chromium
 - Extra apps: VLC, MPV, Xarchiver, File Roller, Fastfetch, Htop, LibreOffice
+- A patched, rebuilt `xdg-desktop-portal` so Chromium's file open/save/upload dialogs work (compiled from source, takes a while)
 
 ## Requirements
 
@@ -52,6 +54,8 @@ This script automates most of the steps from the [official Anland: Termux user g
 
 ## Notes
 
+- The `xdg-desktop-portal` fix compiles from source and can take several minutes depending on your device. It's safe to re-run later with `~/fix-xdg-desktop-portal.sh` if it fails or times out during install.
+
 - Package versions (`anland`, `xwayland`, `kwin-anland`, etc.) are hardcoded in the script based on the release available at the time it was written. If a newer release comes out, check [Anland: Termux releases](https://github.com/lfdevs/anland-termux/releases/latest) and [termux-packages releases](https://github.com/lfdevs/termux-packages/releases), then update the `URL_*` variables at the top of the script.
 - Devices with a non-Adreno GPU (MediaTek, Exynos, Tensor) will likely only work with software rendering (LLVMpipe) and may not be able to fully run the Wayland desktop.
 
@@ -63,4 +67,3 @@ This script automates most of the steps from the [official Anland: Termux user g
 ## License
 
 This script is provided for personal/community use. Feel free to modify it to fit your device.
- 
