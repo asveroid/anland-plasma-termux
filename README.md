@@ -6,7 +6,6 @@ This script automates most of the steps from the [official Anland: Termux user g
 
 ## What gets installed
 
-- `curl`, `wget`, `procps` (needed for a working `pkill`, since Termux's default `pkill` can throw "Bad system call" on some Android devices)
 - KDE Plasma (`plasma`, `dolphin`, `konsole`)
 - XWayland + KWin (Anland variant)
 - Anland daemon
@@ -14,7 +13,7 @@ This script automates most of the steps from the [official Anland: Termux user g
 - Freedreno (KGSL) driver for GPU acceleration
 - PipeWire (audio)
 - Chromium
-- Extra apps: VLC, MPV, Xarchiver, File Roller, Fastfetch, Htop, LibreOffice
+- Extra apps: VLC, MPV, Xarchiver, File Roller, Fastfetch, Htop, and (optionally, you'll be prompted) LibreOffice
 - A patched, rebuilt `xdg-desktop-portal` so Chromium's file open/save/upload dialogs work (compiled from source, takes a while)
 
 ## Requirements
