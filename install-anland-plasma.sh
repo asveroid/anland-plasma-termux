@@ -87,7 +87,14 @@ pkg install chromium -y
 echo "=================================================="
 echo " Step 6: Additional apps"
 echo "=================================================="
-pkg install vlc mpv xarchiver file-roller fastfetch htop libreoffice -y
+pkg install vlc mpv xarchiver file-roller fastfetch htop -y
+
+read -p "Install LibreOffice? It's a large download. (y/n) " install_libreoffice
+if [[ "$install_libreoffice" == "y" || "$install_libreoffice" == "Y" ]]; then
+    pkg install libreoffice -y
+else
+    echo "Skipping LibreOffice."
+fi
 
 echo "=================================================="
 echo " Step 7: Anland daemon"
@@ -194,7 +201,7 @@ log()  { printf '\033[32m[+] %s\033[0m\n' "$1"; }
 warn() { printf '\033[33m[!] %s\033[0m\n' "$1"; }
 die()  { printf '\033[31m[x] %s\033[0m\n' "$1" >&2; exit 1; }
 
-[[ -n "${TERMUX_VERSION:-}" ]] || die "Script ini cuma buat native Termux, bukan proot/chroot."
+[[ -n "${TERMUX_VERSION:-}" ]] || die "This script is only for native Termux, not proot/chroot."
 
 # ---------------------------------------------------------------------------
 log "Step 1/7: Install dependencies"
@@ -209,34 +216,34 @@ for dep in "${DEPS[@]}"; do
 done
 
 if [[ ${#FAILED_DEPS[@]} -gt 0 ]]; then
-    warn "Paket berikut gagal terinstall (nama mungkin beda di device ini): ${FAILED_DEPS[*]}"
-    warn "Cek nama yang benar dengan: pkg search <nama>, lalu install manual sebelum lanjut."
-    read -rp "Lanjut tetap coba build? (y/n) " reply
+    warn "The following packages failed to install (names may differ on this device): ${FAILED_DEPS[*]}"
+    warn "Check the correct name with: pkg search <name>, then install it manually before continuing."
+    read -rp "Continue and try to build anyway? (y/n) " reply
     [[ $reply == y || $reply == Y ]] || exit 1
 fi
 
 pip install --quiet meson --break-system-packages
 
-command -v meson  > /dev/null || die "meson gagal terinstall"
-command -v ninja  > /dev/null || die "ninja gagal terinstall"
+command -v meson  > /dev/null || die "meson failed to install"
+command -v ninja  > /dev/null || die "ninja failed to install"
 
 # ---------------------------------------------------------------------------
-log "Step 2/7: Clone source (versi dicocokkan dengan paket terpasang)"
+log "Step 2/7: Clone source (version matched to the installed package)"
 # ---------------------------------------------------------------------------
 INSTALLED_VERSION=$(pkg show xdg-desktop-portal 2>/dev/null | awk -F': ' '/^Version/{print $2; exit}') || true
 INSTALLED_VERSION=${INSTALLED_VERSION:-1.22.1}
-log "Versi terpasang terdeteksi: $INSTALLED_VERSION"
+log "Detected installed version: $INSTALLED_VERSION"
 
 rm -rf "$SRC_DIR"
 if ! git clone --branch "$INSTALLED_VERSION" --depth 1 \
         https://github.com/flatpak/xdg-desktop-portal.git "$SRC_DIR" 2> "$HOME/xdp-clone.log"; then
-    warn "Tag $INSTALLED_VERSION tidak ketemu, fallback ke 1.22.1"
+    warn "Tag $INSTALLED_VERSION not found, falling back to 1.22.1"
     rm -rf "$SRC_DIR"
     git clone --branch 1.22.1 --depth 1 \
         https://github.com/flatpak/xdg-desktop-portal.git "$SRC_DIR"
 fi
 
-log "Mengunduh subprojects (libglnx, gvdb) -- dibutuhkan sebelum patching"
+log "Downloading subprojects (libglnx, gvdb) -- needed before patching"
 cd "$SRC_DIR"
 meson subprojects download
 
@@ -252,10 +259,10 @@ def patch(path, old, new, label):
     with open(path) as f:
         content = f.read()
     if new.strip() in content:
-        print(f"  - sudah dipatch, skip: {label}")
+        print(f"  - already patched, skip: {label}")
         return
     if old not in content:
-        print(f"  ! GAGAL, teks lama tidak ketemu di {label} -- source mungkin berubah, cek manual.")
+        print(f"  ! FAILED, old text not found in {label} -- source may have changed, check manually.")
         sys.exit(1)
     content = content.replace(old, new)
     with open(path, "w") as f:
@@ -366,10 +373,10 @@ for fname in ("glnx-fdio.c", "glnx-shutil.c"):
     with open(fpath) as f:
         content = f.read()
     if "strdupa is a GNU libc extension" in content:
-        print(f"  - sudah dipatch, skip: {fname}")
+        print(f"  - already patched, skip: {fname}")
         continue
     if '#include "libglnx-config.h"' not in content:
-        print(f"  ! GAGAL, include anchor tidak ketemu di {fname}")
+        print(f"  ! FAILED, include anchor not found in {fname}")
         sys.exit(1)
     content = content.replace('#include "libglnx-config.h"', compat_macro, 1)
     with open(fpath, "w") as f:
@@ -388,38 +395,38 @@ CFLAGS="-target aarch64-linux-android30" meson setup builddir \
     -Dsandboxed-sound-validation=disabled
 
 # ---------------------------------------------------------------------------
-log "Step 6/7: Compile (ninja) -- ini bisa makan waktu, sabar"
+log "Step 6/7: Compile (ninja) -- this can take a while, be patient"
 # ---------------------------------------------------------------------------
 cd "$SRC_DIR/builddir"
 ninja
 
-[[ -x src/xdg-desktop-portal ]] || die "Build gagal, binary hasil tidak ditemukan."
+[[ -x src/xdg-desktop-portal ]] || die "Build failed, output binary not found."
 
 # ---------------------------------------------------------------------------
-log "Step 7/7: Backup binary lama, pasang binary hasil patch"
+log "Step 7/7: Backup old binary, install the patched one"
 # ---------------------------------------------------------------------------
 mkdir -p "$BACKUP_DIR"
 pkill -9 -f "$PORTAL_BIN\$" > /dev/null 2>&1 || true
 
 if [[ -f "$PORTAL_BIN" && ! -f "$BACKUP_DIR/xdg-desktop-portal.orig" ]]; then
     cp "$PORTAL_BIN" "$BACKUP_DIR/xdg-desktop-portal.orig"
-    log "Binary asli di-backup ke: $BACKUP_DIR/xdg-desktop-portal.orig"
+    log "Original binary backed up to: $BACKUP_DIR/xdg-desktop-portal.orig"
 fi
 
 cp "$SRC_DIR/builddir/src/xdg-desktop-portal" "$PORTAL_BIN"
 chmod 755 "$PORTAL_BIN"
 
-log "SELESAI. xdg-desktop-portal sudah dipatch dan terpasang di:"
+log "DONE. xdg-desktop-portal has been patched and installed at:"
 echo "    $PORTAL_BIN"
 echo
-echo "Cara pakai:"
-echo "  1. Pastikan xdg-desktop-portal-kde juga jalan (satu D-Bus session yang sama):"
+echo "How to use:"
+echo "  1. Make sure xdg-desktop-portal-kde is also running (same D-Bus session):"
 echo "     $PREFIX/lib/libexec/xdg-desktop-portal-kde &"
-echo "  2. Jalankan daemon yang sudah dipatch:"
+echo "  2. Run the patched daemon:"
 echo "     $PORTAL_BIN &"
-echo "  3. Buka chromium-browser dan coba Ctrl+O / upload file."
+echo "  3. Open chromium-browser and try Ctrl+O / file upload."
 echo
-echo "Untuk rollback ke binary asli:"
+echo "To roll back to the original binary:"
 echo "  cp $BACKUP_DIR/xdg-desktop-portal.orig $PORTAL_BIN"
 FIXPORTALEOF
 chmod +x "$HOME/fix-xdg-desktop-portal.sh"
@@ -429,8 +436,6 @@ echo "=================================================="
 echo " DONE"
 echo "=================================================="
 echo "All packages are installed. Next steps (manual):"
-echo "1. Start the daemon:"
-echo "     killall anland > /dev/null 2>&1; anland > /dev/null 2>&1 &"
-echo "     pkill -TERM -x anland-compatible; anland-compatible &   # if using the -compatible APK"
-echo "2. Open the 'Anland Termux' app on Android."
-echo "3. Run: ~/startplasma-anland.sh"
+echo "1. Open the 'Anland Termux' app on Android."
+echo "2. Run: ~/startplasma-anland.sh"
+ 
