@@ -438,4 +438,5 @@ echo "=================================================="
 echo "All packages are installed. Next steps (manual):"
 echo "1. Open the 'Anland Termux' app on Android."
 echo "2. Run: ~/startplasma-anland.sh"
- 
+
+apt-mark hold xwayland mesa mesa-vulkan-icd-freedreno weston layer-shell-qt mutter libical spidermonkey
